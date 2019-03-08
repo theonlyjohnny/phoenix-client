@@ -1,0 +1,10 @@
+[Unit]
+Description=Docker deploys through Phoenix
+After=network.target
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/phoenix_deploy.py
+SyslogIdentifier=phoenix_deploy
+RestartSec=1s
+Restart=always
+[Install]
+WantedBy=multi-user.target
