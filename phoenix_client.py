@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import urllib3
 import socket
 import signal
 import json
@@ -16,7 +17,6 @@ parser = argparse.ArgumentParser(description="Deploy Docker")
 parser.add_argument("--service-source", dest="service_source", required=True)
 parser.add_argument("--docker-repo", dest="docker_repo", required=True)
 parser.add_argument("--env", dest="phoenix_env", required=True)
-parser.add_argument("--cluster-path", dest="cluster_path", required=True)
 
 parser.add_argument("--no-loop", dest="loop", action="store_false")
 parser.add_argument("-v", dest="verbose", action="store_true")
@@ -26,12 +26,17 @@ parser.add_argument("--min-speed", dest="min_speed", type=int, default=10)
 parser.add_argument("--default-services", dest="default_services", default=[], nargs="*")
 parser.add_argument("--cluster-name", dest="cluster_name", help="cluster to operate as")
 parser.add_argument("--service-names", dest="service_names", help="service names to deploy", nargs="*", default=[])
+parser.add_argument("--phoenix-port", dest="phoenix_port", help="localhost:port to reach for cluster/service information", type=int, default=7469)
 
 logging.basicConfig(level=logging.INFO, format='docker_deploy %(levelname)s [%(threadName)s:%(module)s.py:%(lineno)d] %(message)s')
 logger = logging.getLogger('docker_deploy')
 
+
 def call(command):
     return subprocess.run(command, stdout=subprocess.PIPE, check=True)
+
+class StatusCodeException(Exception):
+    pass
 
 class DockerUtils():
     @classmethod
@@ -111,20 +116,25 @@ class PhoenixDeploy():
         self.args = _args
         self.cluster_name = self.args.cluster_name or socket.getfqdn().split("-")[1]
 
+        self.http = urllib3.PoolManager()
+
+    def _get_from_phoenix_master(self, path):
+        port = self.args.phoenix_port
+        request = self.http.request('GET', 'http://localhost:%s/%s' % (port, path))
+        if request.status != 200:
+            raise StatusCodeException(request)
+        return json.loads(request.data.decode('utf-8'))
+
     def _get_cluster(self):
         try:
-            with open(args.cluster_path + '/' + self.cluster_name, 'r') as f:
-                cluster = Cluster(json.load(f))
-                return cluster
-        except FileNotFoundError:
+            return self._get_from_phoenix_master('cluster/%s' % self.cluster_name)
+        except Exception:
             return None
 
     def _get_service(self, service_name):
         try:
-            with open(args.service_path + '/' + service_name, 'r') as f:
-                service = Service(json.load(f))
-                return service
-        except FileNotFoundError:
+            return self._get_from_phoenix_master('service/%s' % service_name)
+        except Exception:
             return None
 
     def start(self):
@@ -167,8 +177,6 @@ class PhoenixDeploy():
 
         for proc in deploy_procs:
             proc.join()
-
-        DockerUtils.system_prune()
 
     def get_service_names(self):
         service_names = self.args.service_names
@@ -293,6 +301,8 @@ class PhoenixDeploy():
         delete_cmd = ['/usr/bin/docker', 'rm', '-f']
         delete_cmd.extend(to_delete)
         call(delete_cmd)
+
+        DockerUtils.system_prune()
 
 if __name__ == '__main__':
     args = parser.parse_args()
